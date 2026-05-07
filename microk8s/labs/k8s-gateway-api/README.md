@@ -541,6 +541,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: red-route
+
 spec:
   parentRefs:
   - name: microk8s-gateway
@@ -550,7 +551,7 @@ spec:
 
   rules:
   - backendRefs:
-    - name: red
+    - name: red-service
       port: 80
 
 ---
@@ -558,6 +559,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: blue-route
+
 spec:
   parentRefs:
   - name: microk8s-gateway
@@ -567,7 +569,7 @@ spec:
 
   rules:
   - backendRefs:
-    - name: blue
+    - name: blue-service
       port: 80
 
 ---
@@ -575,6 +577,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: green-route
+
 spec:
   parentRefs:
   - name: microk8s-gateway
@@ -584,7 +587,7 @@ spec:
 
   rules:
   - backendRefs:
-    - name: green
+    - name: green-service
       port: 80
 ```
 
