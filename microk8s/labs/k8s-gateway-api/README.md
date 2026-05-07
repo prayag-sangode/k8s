@@ -634,7 +634,7 @@ Example:
 Edit hosts file:
 
 ```bash id="jlwm8r"
-sudo nano /etc/hosts
+sudo vim /etc/hosts
 ```
 
 Add:
