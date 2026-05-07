@@ -1,0 +1,805 @@
+# Kubernetes Gateway API + NGINX Gateway Fabric + cert-manager + Real TLS on MicroK8s
+
+This lab demonstrates a complete production-style Kubernetes networking setup using:
+
+* MicroK8s
+* MetalLB
+* Gateway API
+* NGINX Gateway Fabric
+* cert-manager
+* Let’s Encrypt
+* HTTPS/TLS
+* Red / Blue / Green Deployments
+* Real Domain Routing
+
+Domain used:
+
+```text id="lab601"
+rpn-labs.in
+```
+
+Applications:
+
+```text id="lab602"
+https://red.rpn-labs.in
+https://blue.rpn-labs.in
+https://green.rpn-labs.in
+```
+
+---
+
+# Architecture
+
+```text id="lab603"
+Internet / Browser
+        |
+        v
+ Public IP + Port Forwarding
+        |
+        v
+      MetalLB
+        |
+        v
+NGINX Gateway Fabric
+        |
+        v
+      Gateway
+   HTTPS Listener
+        |
+        v
+    HTTPRoutes
+        |
+        v
+Red / Blue / Green Services
+        |
+        v
+hashicorp/http-echo Pods
+```
+
+---
+
+# Pre-Requisites
+
+## VM Requirements
+
+| Resource | Recommended |
+| -------- | ----------- |
+| CPU      | 2 vCPU      |
+| RAM      | 4 GB        |
+| Disk     | 20 GB       |
+
+OS:
+
+```text id="lab604"
+Ubuntu 22.04 / 24.04
+```
+
+---
+
+# Important Requirements
+
+You must have:
+
+## Domain DNS Records
+
+Point domain/subdomains to your PUBLIC IP.
+
+Example:
+
+| DNS Record        | Value          |
+| ----------------- | -------------- |
+| red.rpn-labs.in   | YOUR_PUBLIC_IP |
+| blue.rpn-labs.in  | YOUR_PUBLIC_IP |
+| green.rpn-labs.in | YOUR_PUBLIC_IP |
+
+OR wildcard:
+
+```text id="lab605"
+*.rpn-labs.in
+```
+
+---
+
+# Router Port Forwarding
+
+Forward ports:
+
+| External Port | Internal VM IP | Internal Port |
+| ------------- | -------------- | ------------- |
+| 80            | 192.168.1.21   | 80            |
+| 443           | 192.168.1.21   | 443           |
+
+---
+
+# Step 1: Install MicroK8s
+
+Install:
+
+```bash id="lab606"
+sudo snap install microk8s --classic
+```
+
+Add user:
+
+```bash id="lab607"
+sudo usermod -a -G microk8s $USER
+
+newgrp microk8s
+```
+
+Verify:
+
+```bash id="lab608"
+microk8s status --wait-ready
+```
+
+---
+
+# Step 2: Enable Required Addons
+
+Enable DNS:
+
+```bash id="lab609"
+microk8s enable dns
+```
+
+Enable Helm:
+
+```bash id="lab610"
+microk8s enable helm3
+```
+
+Enable MetalLB:
+
+```bash id="lab611"
+microk8s enable metallb
+```
+
+Example IP pool:
+
+```text id="lab612"
+192.168.1.240-192.168.1.250
+```
+
+Use free IPs from your LAN.
+
+---
+
+# Step 3: Configure kubectl Alias
+
+```bash id="lab613"
+alias kubectl='microk8s kubectl'
+```
+
+Persist:
+
+```bash id="lab614"
+echo "alias kubectl='microk8s kubectl'" >> ~/.bashrc
+
+source ~/.bashrc
+```
+
+Verify:
+
+```bash id="lab615"
+kubectl get nodes
+```
+
+---
+
+# Step 4: Install Gateway API CRDs
+
+```bash id="lab616"
+kubectl apply -f \
+https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.0.0/standard-install.yaml
+```
+
+Verify:
+
+```bash id="lab617"
+kubectl get crd | grep gateway
+```
+
+---
+
+# Step 5: Install NGINX Gateway Fabric
+
+Install:
+
+```bash id="lab618"
+helm install nginx-gateway \
+oci://ghcr.io/nginxinc/charts/nginx-gateway-fabric \
+--version 1.2.0 \
+--create-namespace \
+-n nginx-gateway
+```
+
+Verify:
+
+```bash id="lab619"
+kubectl get pods -n nginx-gateway
+```
+
+---
+
+# Step 6: Verify LoadBalancer IP
+
+```bash id="lab620"
+kubectl get svc -n nginx-gateway
+```
+
+Expected:
+
+```text id="lab621"
+EXTERNAL-IP: 192.168.1.240
+```
+
+MetalLB assigns external IP automatically.
+
+---
+
+# Step 7: Install cert-manager
+
+Add repo:
+
+```bash id="lab622"
+helm repo add jetstack https://charts.jetstack.io --force-update
+```
+
+Update repo:
+
+```bash id="lab623"
+helm repo update
+```
+
+Install cert-manager:
+
+```bash id="lab624"
+helm install \
+  cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --create-namespace \
+  --version v1.15.0 \
+  --set crds.enabled=true
+```
+
+Verify:
+
+```bash id="lab625"
+kubectl get pods -n cert-manager
+```
+
+Expected:
+
+```text id="lab626"
+cert-manager
+cert-manager-webhook
+cert-manager-cainjector
+```
+
+---
+
+# Step 8: Deploy Applications
+
+## red.yaml
+
+```yaml id="lab627"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: red
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: red
+
+  template:
+    metadata:
+      labels:
+        app: red
+
+    spec:
+      containers:
+      - name: red
+        image: hashicorp/http-echo:0.2.3
+
+        args:
+        - "-text=Hello from RED Deployment"
+        - "-listen=:80"
+
+        ports:
+        - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: red-service
+
+spec:
+  selector:
+    app: red
+
+  ports:
+  - port: 80
+    targetPort: 80
+```
+
+Apply:
+
+```bash id="lab628"
+kubectl apply -f red.yaml
+```
+
+---
+
+# blue.yaml
+
+```yaml id="lab629"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blue
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: blue
+
+  template:
+    metadata:
+      labels:
+        app: blue
+
+    spec:
+      containers:
+      - name: blue
+        image: hashicorp/http-echo:0.2.3
+
+        args:
+        - "-text=Hello from BLUE Deployment"
+        - "-listen=:80"
+
+        ports:
+        - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blue-service
+
+spec:
+  selector:
+    app: blue
+
+  ports:
+  - port: 80
+    targetPort: 80
+```
+
+Apply:
+
+```bash id="lab630"
+kubectl apply -f blue.yaml
+```
+
+---
+
+# green.yaml
+
+```yaml id="lab631"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: green
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: green
+
+  template:
+    metadata:
+      labels:
+        app: green
+
+    spec:
+      containers:
+      - name: green
+        image: hashicorp/http-echo:0.2.3
+
+        args:
+        - "-text=Hello from GREEN Deployment"
+        - "-listen=:80"
+
+        ports:
+        - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: green-service
+
+spec:
+  selector:
+    app: green
+
+  ports:
+  - port: 80
+    targetPort: 80
+```
+
+Apply:
+
+```bash id="lab632"
+kubectl apply -f green.yaml
+```
+
+---
+
+# Step 9: Verify Applications
+
+```bash id="lab633"
+kubectl get deploy,svc,pods
+```
+
+---
+
+# Step 10: Create ClusterIssuer
+
+Create:
+
+```bash id="lab634"
+vim clusterissuer.yaml
+```
+
+---
+
+# clusterissuer.yaml
+
+```yaml id="lab635"
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+
+metadata:
+  name: letsencrypt-prod
+
+spec:
+  acme:
+    email: admin@rpn-labs.in
+
+    server: https://acme-v02.api.letsencrypt.org/directory
+
+    privateKeySecretRef:
+      name: letsencrypt-prod
+
+    solvers:
+    - http01:
+        gatewayHTTPRoute:
+          parentRefs:
+          - name: microk8s-gateway
+            namespace: default
+            kind: Gateway
+```
+
+Apply:
+
+```bash id="lab636"
+kubectl apply -f clusterissuer.yaml
+```
+
+---
+
+# Step 11: Create Certificate
+
+Create:
+
+```bash id="lab637"
+vim certificate.yaml
+```
+
+---
+
+# certificate.yaml
+
+```yaml id="lab638"
+apiVersion: cert-manager.io/v1
+kind: Certificate
+
+metadata:
+  name: rpn-labs-tls
+
+spec:
+  secretName: rpn-labs-tls
+
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+
+  dnsNames:
+  - red.rpn-labs.in
+  - blue.rpn-labs.in
+  - green.rpn-labs.in
+```
+
+Apply:
+
+```bash id="lab639"
+kubectl apply -f certificate.yaml
+```
+
+---
+
+# Step 12: Create Gateway
+
+Create:
+
+```bash id="lab640"
+vim gateway.yaml
+```
+
+---
+
+# gateway.yaml
+
+```yaml id="lab641"
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+
+metadata:
+  name: microk8s-gateway
+
+spec:
+  gatewayClassName: nginx
+
+  listeners:
+
+  - name: http
+    protocol: HTTP
+    port: 80
+    hostname: "*.rpn-labs.in"
+
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: "*.rpn-labs.in"
+
+    tls:
+      mode: Terminate
+
+      certificateRefs:
+      - name: rpn-labs-tls
+```
+
+Apply:
+
+```bash id="lab642"
+kubectl apply -f gateway.yaml
+```
+
+---
+
+# Step 13: Create HTTPRoutes
+
+Create:
+
+```bash id="lab643"
+vim routes.yaml
+```
+
+---
+
+# routes.yaml
+
+```yaml id="lab644"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: red-route
+
+spec:
+  parentRefs:
+  - name: microk8s-gateway
+
+  hostnames:
+  - "red.rpn-labs.in"
+
+  rules:
+  - backendRefs:
+    - name: red-service
+      port: 80
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: blue-route
+
+spec:
+  parentRefs:
+  - name: microk8s-gateway
+
+  hostnames:
+  - "blue.rpn-labs.in"
+
+  rules:
+  - backendRefs:
+    - name: blue-service
+      port: 80
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: green-route
+
+spec:
+  parentRefs:
+  - name: microk8s-gateway
+
+  hostnames:
+  - "green.rpn-labs.in"
+
+  rules:
+  - backendRefs:
+    - name: green-service
+      port: 80
+```
+
+Apply:
+
+```bash id="lab645"
+kubectl apply -f routes.yaml
+```
+
+---
+
+# Step 14: Verify Certificate
+
+```bash id="lab646"
+kubectl get certificate
+```
+
+Check secret:
+
+```bash id="lab647"
+kubectl get secret rpn-labs-tls
+```
+
+Expected:
+
+```text id="lab648"
+TYPE: kubernetes.io/tls
+```
+
+---
+
+# Step 15: Verify Gateway
+
+```bash id="lab649"
+kubectl get gateway
+```
+
+Describe:
+
+```bash id="lab650"
+kubectl describe gateway microk8s-gateway
+```
+
+Expected:
+
+```text id="lab651"
+Programmed=True
+```
+
+---
+
+# Step 16: Verify HTTPRoutes
+
+```bash id="lab652"
+kubectl get httproute
+```
+
+Describe:
+
+```bash id="lab653"
+kubectl describe httproute red-route
+```
+
+Expected:
+
+```text id="lab654"
+Accepted=True
+ResolvedRefs=True
+```
+
+---
+
+# Step 17: Test HTTPS
+
+Open:
+
+```text id="lab655"
+https://red.rpn-labs.in
+
+https://blue.rpn-labs.in
+
+https://green.rpn-labs.in
+```
+
+OR:
+
+```bash id="lab656"
+curl https://red.rpn-labs.in
+```
+
+Expected:
+
+```text id="lab657"
+Hello from RED Deployment
+```
+
+---
+
+# Verification Commands
+
+## Gateway
+
+```bash id="lab658"
+kubectl get gateway
+```
+
+## Routes
+
+```bash id="lab659"
+kubectl get httproute
+```
+
+## Certificates
+
+```bash id="lab660"
+kubectl get certificate
+```
+
+## Challenges
+
+```bash id="lab661"
+kubectl get challenge
+```
+
+## Orders
+
+```bash id="lab662"
+kubectl get order
+```
+
+## Gateway Pods
+
+```bash id="lab663"
+kubectl get pods -n nginx-gateway
+```
+
+---
+
+# Final Outcome
+
+You now have:
+
+- MicroK8s
+- MetalLB
+- Gateway API
+- NGINX Gateway Fabric
+- cert-manager
+- Let’s Encrypt TLS
+- Real HTTPS Domain Routing
+- Red / Blue / Green Deployments
+- Production-style Kubernetes Networking
