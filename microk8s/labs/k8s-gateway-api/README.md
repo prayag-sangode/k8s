@@ -211,68 +211,271 @@ MetalLB automatically assigns external IP.
 
 We will use:
 
-```text id="h0h0z7"
-ealen/echo-server
+```text id="jlwm201"
+hashicorp/http-echo
 ```
 
-This image prints request details and headers.
+This image returns custom text responses, making it perfect for:
+
+* Red / Blue / Green demos
+* Gateway API labs
+* Ingress labs
+* Traffic routing demonstrations
+
+
+---
+# Red Deployment + Service
+
+```yaml id="jlwm301"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: red
+  labels:
+    app: demo
+    version: red
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: demo
+      version: red
+
+  template:
+    metadata:
+      labels:
+        app: demo
+        version: red
+
+    spec:
+      containers:
+      - name: red-container
+        image: hashicorp/http-echo:0.2.3
+
+        args:
+        - "-text=Hello from RED Deployment"
+        - "-listen=:80"
+
+        ports:
+        - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: red-service
+
+spec:
+  selector:
+    app: demo
+    version: red
+
+  ports:
+  - port: 80
+    targetPort: 80
+```
+
+Apply:
+
+```bash id="’wini302"
+kubectl apply -f red.yaml
+```
 
 ---
 
-# Create Red Deployment
+# Blue Deployment + Service
 
-```bash id="mibdxf"
-kubectl create deployment red \
---image=ealen/echo-server \
---replicas=2
+```yaml id="’wini303"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blue
+  labels:
+    app: demo
+    version: blue
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: demo
+      version: blue
+
+  template:
+    metadata:
+      labels:
+        app: demo
+        version: blue
+
+    spec:
+      containers:
+      - name: blue-container
+        image: hashicorp/http-echo:0.2.3
+
+        args:
+        - "-text=Hello from BLUE Deployment"
+        - "-listen=:80"
+
+        ports:
+        - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blue-service
+
+spec:
+  selector:
+    app: demo
+    version: blue
+
+  ports:
+  - port: 80
+    targetPort: 80
 ```
 
-Expose:
+Apply:
 
-```bash id="z0w54u"
-kubectl expose deployment red \
---port=80 \
---target-port=80
+```bash id="’wini304"
+kubectl apply -f blue.yaml
 ```
 
 ---
 
-# Create Blue Deployment
+# Green Deployment + Service
 
-```bash id="r4xw0r"
-kubectl create deployment blue \
---image=ealen/echo-server \
---replicas=2
+```yaml id="’wini305"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: green
+  labels:
+    app: demo
+    version: green
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: demo
+      version: green
+
+  template:
+    metadata:
+      labels:
+        app: demo
+        version: green
+
+    spec:
+      containers:
+      - name: green-container
+        image: hashicorp/http-echo:0.2.3
+
+        args:
+        - "-text=Hello from GREEN Deployment"
+        - "-listen=:80"
+
+        ports:
+        - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: green-service
+
+spec:
+  selector:
+    app: demo
+    version: green
+
+  ports:
+  - port: 80
+    targetPort: 80
 ```
 
-Expose:
+Apply:
 
-```bash id="p0t87y"
-kubectl expose deployment blue \
---port=80 \
---target-port=80
+```bash id="’wini306"
+kubectl apply -f green.yaml
 ```
 
 ---
 
-# Create Green Deployment
+# Verify Resources
 
-```bash id="jlwmcb"
-kubectl create deployment green \
---image=ealen/echo-server \
---replicas=2
+```bash id="’wini307"
+kubectl get deploy,svc,pods
 ```
 
-Expose:
+Expected:
 
-```bash id="h7pxa2"
-kubectl expose deployment green \
---port=80 \
---target-port=80
+```text id="’wini308"
+red-service
+blue-service
+green-service
+
+red pods
+blue pods
+green pods
 ```
 
 ---
 
+# Quick Internal Testing
+
+## Red
+
+```bash id="’wini309"
+kubectl port-forward svc/red-service 8080:80
+```
+
+Open:
+
+```text id="’wini310"
+http://localhost:8080
+```
+
+Expected:
+
+```text id="’wini311"
+Hello from RED Deployment
+```
+
+---
+
+## Blue
+
+```bash id="’wini312"
+kubectl port-forward svc/blue-service 8081:80
+```
+
+Expected:
+
+```text id="’wini313"
+Hello from BLUE Deployment
+```
+
+---
+
+## Green
+
+```bash id="’wini314"
+kubectl port-forward svc/green-service 8082:80
+```
+
+Expected:
+
+```text id="’wini315"
+Hello from GREEN Deployment
+```
+
+---
 # Step 8: Verify Deployments
 
 ```bash id="pcx9l1"
